@@ -15,6 +15,34 @@ Given a target image I, find a set of geometric primitives theta such that:
 
 where R(theta) is the image produced by rendering the primitives.
 
+## Running
+
+Drop any image into `images/`, then:
+
+    ./run.sh cat.png [triangles] [candidates] [size]
+
+Defaults are 200 triangles, 2000 candidates per triangle, and a 256 pixel
+longest side. The script builds, converts, runs, and opens the result.
+Run it with no arguments to list the images available.
+
+Everything generated goes to `out/`:
+
+- `<name>-target.ppm` — the converted target the program actually fits
+- `<name>.ppm` — the reconstruction
+- `<name>_tris.txt` — one triangle per line, 10 parameters each
+
+Runtime scales with pixels x triangles x candidates, so raise `size` only once
+you know how long a run takes.
+
+To drive the pieces directly instead:
+
+    c++ -O2 -o geo main.cpp
+    python3 tools/toppm.py images/cat.png out/cat-target.ppm 256
+    ./geo out/cat-target.ppm 200 2000 out/cat
+
+`tools/toppm.py` converts any image macOS can read into a binary PPM, using
+sips plus a small PNG decoder, so there are no third-party dependencies.
+
 ## Initial Constraints
 
 - Start with triangles only
