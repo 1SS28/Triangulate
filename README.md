@@ -1,4 +1,4 @@
-# Geometric Image Approximation
+# Triangulate
 
 ## Goal
 
