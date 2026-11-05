@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <vector>
 
 using namespace std;
@@ -88,10 +89,39 @@ bool inside(const Tri &t, float inv, float px, float py) {
     return w0 >= 0 && w1 >= 0 && 1 - w0 - w1 >= 0;
 }
 
+// A convex triangle covers one contiguous span per scanline. Each edge gives a
+// half-line constraint w + g*(x-bx0) >= 0, so intersecting the three gives the span
+// directly -- no per-pixel test, and the run is contiguous for SIMD and for the GPU.
+void span(float w0, float w1, float w2, float g0, float g1, float g2,
+          int bx0, int bx1, int &xs, int &xe) {
+    xs = bx0; xe = bx1;
+    float w[3] = {w0, w1, w2}, g[3] = {g0, g1, g2};
+    for (int i = 0; i < 3; i++) {
+        if (g[i] > 0) {
+            int m = bx0 + (int)ceil(-w[i] / g[i]);
+            if (m > xs) xs = m;
+        } else if (g[i] < 0) {
+            int m = bx0 + (int)floor(-w[i] / g[i]) + 1;
+            if (m < xe) xe = m;
+        } else if (w[i] < 0) {
+            xe = xs;  // this edge excludes the whole row
+            return;
+        }
+    }
+    if (xe < xs) xe = xs;  // constraints can cross: empty row, not a negative count
+    // the divisions round, so settle the two ends against the exact test
+    while (xs < xe && (w0 + g0 * (xs - bx0) < 0 || w1 + g1 * (xs - bx0) < 0 || w2 + g2 * (xs - bx0) < 0)) xs++;
+    while (xe > xs && (w0 + g0 * (xe - 1 - bx0) < 0 || w1 + g1 * (xe - 1 - bx0) < 0 || w2 + g2 * (xe - 1 - bx0) < 0)) xe--;
+}
+
 // One rasterization gives both the best color and the error it would cause.
 // Write u = (1-a)v - t for a covered pixel, e = v - t. Drawing color c makes the
 // error sum n(ac)^2 + 2ac*Su + Su2, so the delta is quadratic in c -- minimized at
 // c = -Su/(na), and both fall out of the same three running sums.
+//
+// The three edge functions are affine in x and y, so walking a scanline is one add
+// each instead of a full evaluation (Pineda). Normalized by 1/area they are the
+// barycentric weights, and the pixel is covered when all three are >= 0.
 double fit(Tri &t, const vector<float> &canvas, const vector<float> &target, int W, int H) {
     float area = edge(t.x1, t.y1, t.x2, t.y2, t.x3, t.y3);
     if (area < 1e-6f && area > -1e-6f) return 0;  // degenerate
@@ -99,20 +129,31 @@ double fit(Tri &t, const vector<float> &canvas, const vector<float> &target, int
     int bx0, by0, bx1, by1;
     box(t, W, H, bx0, by0, bx1, by1);
 
+    float px = bx0 + 0.5f, py = by0 + 0.5f;
+    float r0 = edge(t.x2, t.y2, t.x3, t.y3, px, py) * inv;
+    float r1 = edge(t.x3, t.y3, t.x1, t.y1, px, py) * inv;
+    float r2 = edge(t.x1, t.y1, t.x2, t.y2, px, py) * inv;
+    float gx0 = -(t.y3 - t.y2) * inv, gy0 = (t.x3 - t.x2) * inv;
+    float gx1 = -(t.y1 - t.y3) * inv, gy1 = (t.x1 - t.x3) * inv;
+    float gx2 = -(t.y2 - t.y1) * inv, gy2 = (t.x2 - t.x1) * inv;
+
     double sU[3] = {0, 0, 0}, sU2[3] = {0, 0, 0}, sE2[3] = {0, 0, 0};
     int n = 0;
     float a = t.a;
-    for (int y = by0; y < by1; y++)
-        for (int x = bx0; x < bx1; x++) {
-            if (!inside(t, inv, x + 0.5f, y + 0.5f)) continue;
+    for (int y = by0; y < by1; y++) {
+        int xs, xe;
+        span(r0, r1, r2, gx0, gx1, gx2, bx0, bx1, xs, xe);
+        for (int x = xs; x < xe; x++) {
             int i = (y * W + x) * 3;
             for (int k = 0; k < 3; k++) {
                 double v = canvas[i + k], tt = target[i + k];
                 double u = (1 - a) * v - tt, e = v - tt;
                 sU[k] += u; sU2[k] += u * u; sE2[k] += e * e;
             }
-            n++;
         }
+        n += xe - xs;
+        r0 += gy0; r1 += gy1; r2 += gy2;
+    }
     if (n == 0) return 0;
 
     double d = 0;
@@ -133,13 +174,25 @@ void draw(const Tri &t, vector<float> &canvas, int W, int H) {
     float inv = 1.0f / area;
     int bx0, by0, bx1, by1;
     box(t, W, H, bx0, by0, bx1, by1);
+
+    float px = bx0 + 0.5f, py = by0 + 0.5f;
+    float r0 = edge(t.x2, t.y2, t.x3, t.y3, px, py) * inv;
+    float r1 = edge(t.x3, t.y3, t.x1, t.y1, px, py) * inv;
+    float r2 = edge(t.x1, t.y1, t.x2, t.y2, px, py) * inv;
+    float gx0 = -(t.y3 - t.y2) * inv, gy0 = (t.x3 - t.x2) * inv;
+    float gx1 = -(t.y1 - t.y3) * inv, gy1 = (t.x1 - t.x3) * inv;
+    float gx2 = -(t.y2 - t.y1) * inv, gy2 = (t.x2 - t.x1) * inv;
+
     float c[3] = {t.r, t.g, t.b};
-    for (int y = by0; y < by1; y++)
-        for (int x = bx0; x < bx1; x++) {
-            if (!inside(t, inv, x + 0.5f, y + 0.5f)) continue;
+    for (int y = by0; y < by1; y++) {
+        int xs, xe;
+        span(r0, r1, r2, gx0, gx1, gx2, bx0, bx1, xs, xe);
+        for (int x = xs; x < xe; x++) {
             float *p = &canvas[(y * W + x) * 3];
             for (int k = 0; k < 3; k++) p[k] = t.a * c[k] + (1 - t.a) * p[k];  // alpha over
         }
+        r0 += gy0; r1 += gy1; r2 += gy2;
+    }
 }
 
 int main(int argc, char **argv) {
