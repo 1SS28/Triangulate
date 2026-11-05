@@ -31,7 +31,7 @@ NAME=$(basename "$IMG")
 NAME=${NAME%.*}  # strip extension
 
 mkdir -p out
-c++ -O2 -o geo main.cpp
+make -s geo
 python3 tools/toppm.py "$IMG" "out/$NAME-target.ppm" "$SIZE"
 ./geo "out/$NAME-target.ppm" "$N" "$TRIES" "out/$NAME"
 open "out/$NAME.ppm"

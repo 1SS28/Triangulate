@@ -36,12 +36,45 @@ you know how long a run takes.
 
 To drive the pieces directly instead:
 
-    c++ -O2 -o geo main.cpp
+    make
     python3 tools/toppm.py images/cat.png out/cat-target.ppm 256
     ./geo out/cat-target.ppm 200 2000 out/cat
 
 `tools/toppm.py` converts any image macOS can read into a binary PPM, using
 sips plus a small PNG decoder, so there are no third-party dependencies.
+
+## Benchmarking
+
+`make bench` builds a runner that times the approximation loop alone -- no file
+IO, no process startup -- and reports the median of several trials plus the
+final error, so a faster kernel that quietly changed the answer is obvious.
+
+    ./bench out/sample-target.ppm 200 2000 5
+
+The rasterizer lives behind `kernel.h` and is swapped at link time, so backends
+can be compared on identical work:
+
+    make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -mavx2"
+    make bench KERNEL=kernel_hip.cpp CXX=hipcc
+
+### CPU optimization so far
+
+Apple M5 Pro, 256x256, 200 triangles, 2000 candidates each, whole-process wall
+time, median of 6.
+
+| version                            | time   | vs prev | error |
+|------------------------------------|--------|---------|-------|
+| V1 random search                   | 2.29 s |    --   | 203.6 |
+| fused color fit + scoring          | 1.01 s |  2.27x  | 145.9 |
+| incremental edge functions         | 0.80 s |  1.26x  | 145.9 |
+| scanline spans                     | 0.40 s |  2.00x  | 145.9 |
+
+The error drop comes from the fused pass solving color analytically rather than
+taking the mean target color. Everything after that is identical output.
+
+Still to do: AVX2, multithreading, and a HIP port, all benchmarked on one
+machine so the GPU comparison is honest. The kernel is memory-bound, so the
+bandwidth ratio predicts the GPU speedup -- worth stating before measuring.
 
 ## Initial Constraints
 
