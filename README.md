@@ -52,9 +52,11 @@ final error, so a faster kernel that quietly changed the answer is obvious.
     ./bench out/sample-target.ppm 200 2000 5 15
 
 The rasterizer lives behind `kernel.h` and is swapped at link time, so backends
-can be compared on identical work:
+can be compared on identical work. `make compare` runs the two CPU kernels head
+to head:
 
-    make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -mavx2"
+    make bench KERNEL=kernel_direct.cpp
+    make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -pthread -mavx2"
     make bench KERNEL=kernel_hip.cpp CXX=hipcc
 
 ### Reconstruction quality
@@ -76,7 +78,9 @@ proportionally less detail as the image grows -- so quote it with the size.
 ### CPU optimization so far
 
 Apple M5 Pro, 256x256, 200 triangles, 2000 candidates each, whole-process wall
-time, median of 6.
+time. Every step below leaves the output bit-identical -- same 200 triangles,
+same parameters -- except the fused pass, which lowers error by solving colour
+exactly instead of taking the mean.
 
 | version                            | time   | vs prev | error |
 |------------------------------------|--------|---------|-------|
@@ -85,10 +89,45 @@ time, median of 6.
 | incremental edge functions         | 0.80 s |  1.26x  | 145.9 |
 | scanline spans                     | 0.40 s |  2.00x  | 145.9 |
 | 15 threads                         | 0.07 s |  5.71x  | 145.9 |
+| prefix-sum kernel, 8 threads       | 0.06 s |  1.17x  | 145.9 |
 
-32x end to end. The error drop comes from the fused pass solving color
-analytically rather than taking the mean target color. Everything after that is
-identical output.
+38x end to end.
+
+### Two kernels
+
+`fit()` needs three sums over the covered pixels, and all three are polynomials
+in five quantities that do not depend on the candidate's colour or alpha:
+
+    Su  = (1-a)Sv - St
+    Su2 = (1-a)^2 Sv2 - 2(1-a) Svt + St2
+    Se2 = Sv2 - 2 Svt + St2
+
+Coverage is one contiguous span per scanline, so row-wise prefix sums of
+v, t, v^2, t^2 and vt turn each row into two lookups per quantity. `fit()` then
+costs O(height) instead of O(area). St and St2 never change; the other three are
+rebuilt only for the rows a committed triangle touched.
+
+Both kernels are kept, because they behave differently under threading:
+
+| threads | direct   | prefix   | prefix is |
+|---------|----------|----------|-----------|
+|       1 | 474.4 ms | 161.8 ms |     2.93x |
+|       2 | 249.1 ms |  94.8 ms |     2.63x |
+|       4 | 141.2 ms |  65.4 ms |     2.16x |
+|       8 |  88.7 ms |  53.4 ms |     1.66x |
+|      15 |  66.8 ms |  58.5 ms |     1.14x |
+
+The advantage narrows as threads are added. The prefix kernel trades arithmetic
+for table lookups, and the tables are far larger than cache -- 21 MB at
+512x341 -- so it goes latency-bound and stops scaling past about 8 threads,
+while the direct kernel reads contiguously and keeps scaling. Peak throughput
+ends up close; the prefix kernel simply reaches it on half the cores.
+
+Two findings on the way there, both from measuring rather than guessing. The
+five sums were first stored as five separate arrays, which was only 1.41x --
+each row cost five cache lines instead of one. Interleaving them at each x took
+it to 2.83x. And the prefix rebuild after each draw was serial, which capped
+threaded performance until it was parallelized over rows.
 
 ### Thread scaling
 
@@ -98,21 +137,11 @@ ascending scan with a strict compare. Results are therefore bit-identical at
 every thread count -- worth checking, since a benchmark that quietly changes the
 work it measures is worthless.
 
-| threads | time     | speedup |
-|---------|----------|---------|
-|       1 | 413.4 ms |   1.00x |
-|       2 | 223.3 ms |   1.85x |
-|       4 | 122.7 ms |   3.37x |
-|       5 | 108.6 ms |   3.81x |
-|       8 |  85.8 ms |   4.82x |
-|      10 |  75.2 ms |   5.50x |
-|      15 |  64.8 ms |   6.38x |
-
 The M5 Pro has 5 performance and 10 efficiency cores, and the curve bends where
 the P cores run out.
 
 Efficiency also depends on round length, because every round ends in a barrier.
-Holding total work fixed at 400,000 candidates:
+Holding total work fixed at 400,000 candidates on the direct kernel:
 
 | rounds x candidates | 1 thread | 15 threads | speedup |
 |---------------------|----------|------------|---------|
@@ -126,8 +155,9 @@ whoever drew the big ones. Pulling small batches off an atomic cursor recovered
 most of the loss.
 
 Still to do: AVX2 and a HIP port, benchmarked on one machine so the GPU
-comparison is honest. The kernel is memory-bound, so the bandwidth ratio
-predicts the GPU speedup -- worth stating before measuring.
+comparison is honest. The direct kernel is the better GPU candidate -- it reads
+contiguously and is bandwidth-bound, where the prefix kernel is latency-bound on
+scattered lookups.
 
 ## Initial Constraints
 

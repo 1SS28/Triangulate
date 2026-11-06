@@ -59,7 +59,9 @@ inline vector<float> readPPM(const char *path, int &W, int &H) {
     H = readInt(f);
     readInt(f);  // maxval, assume 255
     vector<float> img(W * H * 3);
-    for (int i = 0; i < W * H * 3; i++) img[i] = fgetc(f) / 255.0f;
+    int WH = W * H;
+    for (int i = 0; i < WH; i++)
+        for (int c = 0; c < 3; c++) img[c * WH + i] = fgetc(f) / 255.0f;  // planes, not interleaved
     fclose(f);
     return img;
 }
@@ -67,12 +69,14 @@ inline vector<float> readPPM(const char *path, int &W, int &H) {
 inline void writePPM(const char *path, const vector<float> &img, int W, int H) {
     FILE *f = fopen(path, "wb");
     fprintf(f, "P6 %d %d 255\n", W, H);
-    for (float v : img) {
-        int c = (int)(v * 255 + 0.5f);  // blending can drift outside [0,1]
-        if (c < 0) c = 0;
-        if (c > 255) c = 255;
-        fputc(c, f);
-    }
+    int WH = W * H;
+    for (int i = 0; i < WH; i++)
+        for (int k = 0; k < 3; k++) {
+            int c = (int)(img[k * WH + i] * 255 + 0.5f);  // blending can drift outside [0,1]
+            if (c < 0) c = 0;
+            if (c > 255) c = 255;
+            fputc(c, f);
+        }
     fclose(f);
 }
 
@@ -85,12 +89,14 @@ inline double loss(const vector<float> &a, const vector<float> &b) {
 
 // canvas filled with the target's mean color
 inline vector<float> meanCanvas(const vector<float> &target, int W, int H) {
+    int WH = W * H;
     double mean[3] = {0, 0, 0};
-    for (int i = 0; i < W * H; i++)
-        for (int k = 0; k < 3; k++) mean[k] += target[i * 3 + k];
-    for (int k = 0; k < 3; k++) mean[k] /= W * H;
-    vector<float> canvas(W * H * 3);
-    for (int i = 0; i < W * H; i++)
-        for (int k = 0; k < 3; k++) canvas[i * 3 + k] = mean[k];
+    for (int k = 0; k < 3; k++) {
+        for (int i = 0; i < WH; i++) mean[k] += target[k * WH + i];
+        mean[k] /= WH;
+    }
+    vector<float> canvas(WH * 3);
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; i < WH; i++) canvas[k * WH + i] = mean[k];
     return canvas;
 }

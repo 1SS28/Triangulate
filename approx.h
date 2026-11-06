@@ -17,8 +17,8 @@ struct Run {
 // is parallel, which is 99% of the work anyway.
 inline Run approximate(const vector<float> &target, int W, int H, int N, int tries, unsigned seed, int threads, bool verbose) {
     Run r;
-    r.canvas = meanCanvas(target, W, H);
-    r.e0 = loss(r.canvas, target);
+    Ctx *ctx = ctxCreate(target, W, H);
+    r.e0 = loss(ctxCanvas(ctx), target);
     r.e = r.e0;
     srand(seed);
 
@@ -30,7 +30,7 @@ inline Run approximate(const vector<float> &target, int W, int H, int N, int tri
         for (int k = 0; k < tries; k++) cand[k] = randomTri(W, H);
 
         function<void(int, int)> job = [&](int lo, int hi) {
-            for (int k = lo; k < hi; k++) score[k] = fit(cand[k], r.canvas, target, W, H);
+            for (int k = lo; k < hi; k++) score[k] = fit(cand[k], ctx);
         };
         if (pool) pool->run(tries, job);
         else job(0, tries);
@@ -47,12 +47,14 @@ inline Run approximate(const vector<float> &target, int W, int H, int N, int tri
             break;
         }
 
-        draw(cand[best], r.canvas, W, H);
+        draw(cand[best], ctx, pool);
         r.e += bestScore;
         r.tris.push_back(cand[best]);
         if (verbose && n % 20 == 19) printf("%4d triangles  error %.1f  (%.1f%% of start)\n", n + 1, r.e, 100 * r.e / r.e0);
     }
 
+    r.canvas = ctxCanvas(ctx);
+    ctxFree(ctx);
     delete pool;
     return r;
 }

@@ -5,3 +5,4 @@ images/*
 *.o
 *.ppm
 bench
+bench-direct
