@@ -107,7 +107,9 @@ v, t, v^2, t^2 and vt turn each row into two lookups per quantity. `fit()` then
 costs O(height) instead of O(area). St and St2 never change; the other three are
 rebuilt only for the rows a committed triangle touched.
 
-Both kernels are kept, because they behave differently under threading:
+Both kernels are kept, because they behave differently under threading.
+
+sample, 256x256, 200 triangles x 2000 candidates:
 
 | threads | direct   | prefix   | prefix is |
 |---------|----------|----------|-----------|
@@ -117,11 +119,25 @@ Both kernels are kept, because they behave differently under threading:
 |       8 |  88.7 ms |  53.4 ms |     1.66x |
 |      15 |  66.8 ms |  58.5 ms |     1.14x |
 
-The advantage narrows as threads are added. The prefix kernel trades arithmetic
-for table lookups, and the tables are far larger than cache -- 21 MB at
-512x341 -- so it goes latency-bound and stops scaling past about 8 threads,
-while the direct kernel reads contiguously and keeps scaling. Peak throughput
-ends up close; the prefix kernel simply reaches it on half the cores.
+kodim23, 512x341, 350 triangles x 2000 candidates:
+
+| threads | direct   | prefix   | prefix is |
+|---------|----------|----------|-----------|
+|       1 | 904.4 ms | 491.5 ms |     1.84x |
+|       2 | 476.1 ms | 220.0 ms |     2.16x |
+|       4 | 256.9 ms | 135.8 ms |     1.89x |
+|       8 | 167.9 ms | 118.2 ms |     1.42x |
+|      15 | 130.5 ms | 138.7 ms |     0.94x |
+
+The advantage narrows as threads are added, and on the larger image the direct
+kernel overtakes at 15. The prefix kernel trades arithmetic for table lookups,
+and the tables are far larger than cache -- 21 MB at 512x341 -- so it goes
+latency-bound and stops scaling past about 8 threads, while the direct kernel
+reads contiguously and keeps scaling.
+
+The fastest run of either kernel on kodim23 is the prefix kernel on 8 threads,
+118 ms, which beats the direct kernel on all 15. Which kernel wins depends on
+how many cores you are willing to spend.
 
 Two findings on the way there, both from measuring rather than guessing. The
 five sums were first stored as five separate arrays, which was only 1.41x --
