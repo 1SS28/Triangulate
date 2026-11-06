@@ -57,6 +57,22 @@ can be compared on identical work:
     make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -mavx2"
     make bench KERNEL=kernel_hip.cpp CXX=hipcc
 
+### Reconstruction quality
+
+Measured on kodim23 from the Kodak set, the standard benchmark photo for image
+reconstruction work, so the numbers are reproducible:
+
+    curl -o images/kodim23.png https://r0k.us/graphics/kodak/kodak/kodim23.png
+    ./run.sh kodim23.png 350 2000 512
+
+| resolution | flat-colour baseline | 350 triangles | % of baseline |
+|------------|----------------------|---------------|---------------|
+| 256 x 170  |               5650.0 |         315.3 |          5.6% |
+| 512 x 341  |              23147.3 |        1785.3 |          7.7% |
+
+The percentage is resolution-dependent -- the same triangle budget covers
+proportionally less detail as the image grows -- so quote it with the size.
+
 ### CPU optimization so far
 
 Apple M5 Pro, 256x256, 200 triangles, 2000 candidates each, whole-process wall
