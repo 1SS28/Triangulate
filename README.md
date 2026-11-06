@@ -82,16 +82,19 @@ time. Every step below leaves the output bit-identical -- same 200 triangles,
 same parameters -- except the fused pass, which lowers error by solving colour
 exactly instead of taking the mean.
 
-| version                            | time   | vs prev | error |
-|------------------------------------|--------|---------|-------|
-| V1 random search                   | 2.29 s |    --   | 203.6 |
-| fused color fit + scoring          | 1.01 s |  2.27x  | 145.9 |
-| incremental edge functions         | 0.80 s |  1.26x  | 145.9 |
-| scanline spans                     | 0.40 s |  2.00x  | 145.9 |
-| 15 threads                         | 0.07 s |  5.71x  | 145.9 |
-| prefix-sum kernel, 8 threads       | 0.06 s |  1.17x  | 145.9 |
+Every row is `/usr/bin/time -p` on the same command, so they are comparable.
 
-38x end to end.
+| version                            | threads | time   | vs prev | error |
+|------------------------------------|---------|--------|---------|-------|
+| V1 random search                   |       1 | 2.29 s |    --   | 203.6 |
+| fused color fit + scoring          |       1 | 1.01 s |  2.27x  | 145.9 |
+| incremental edge functions         |       1 | 0.80 s |  1.26x  | 145.9 |
+| scanline spans                     |       1 | 0.40 s |  2.00x  | 145.9 |
+| prefix-sum kernel                  |       1 | 0.15 s |  2.67x  | 145.9 |
+| prefix-sum kernel                  |       8 | 0.06 s |  2.50x  | 145.9 |
+
+**15x single-threaded, 38x end to end.** The single-thread column is the honest
+measure of the algorithmic work; the last row is what adding cores buys on top.
 
 ### Two kernels
 
