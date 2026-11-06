@@ -13,6 +13,7 @@ int main(int argc, char **argv) {
     int N = argc > 2 ? atoi(argv[2]) : 200;
     int tries = argc > 3 ? atoi(argv[3]) : 2000;
     int trials = argc > 4 ? atoi(argv[4]) : 5;
+    int threads = argc > 5 ? atoi(argv[5]) : 1;
 
     int W, H;
     vector<float> target = readPPM(path, W, H);
@@ -21,13 +22,13 @@ int main(int argc, char **argv) {
     double err = 0;
     for (int i = 0; i < trials; i++) {
         auto t0 = steady_clock::now();
-        Run r = approximate(target, W, H, N, tries, 12345, false);
+        Run r = approximate(target, W, H, N, tries, 12345, threads, false);
         auto t1 = steady_clock::now();
         ms.push_back(duration<double, milli>(t1 - t0).count());
         err = r.e;
     }
     sort(ms.begin(), ms.end());
 
-    printf("%-8s %5dx%-5d N=%-5d tries=%-6d trials=%-3d  median %8.1f ms  min %8.1f  max %8.1f  error %.1f\n",
-           KERNEL_NAME, W, H, N, tries, trials, ms[trials / 2], ms.front(), ms.back(), err);
+    printf("%-8s %5dx%-5d N=%-5d tries=%-6d threads=%-3d trials=%-3d  median %8.1f ms  error %.1f\n",
+           KERNEL_NAME, W, H, N, tries, threads, trials, ms[trials / 2], err);
 }

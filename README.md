@@ -19,10 +19,10 @@ where R(theta) is the image produced by rendering the primitives.
 
 Drop any image into `images/`, then:
 
-    ./run.sh cat.png [triangles] [candidates] [size]
+    ./run.sh cat.png [triangles] [candidates] [size] [threads]
 
-Defaults are 200 triangles, 2000 candidates per triangle, and a 256 pixel
-longest side. The script builds, converts, runs, and opens the result.
+Defaults are 200 triangles, 2000 candidates per triangle, a 256 pixel longest
+side, and a single thread. Thread count does not change the output. The script builds, converts, runs, and opens the result.
 Run it with no arguments to list the images available.
 
 Everything generated goes to `out/`:
@@ -38,7 +38,7 @@ To drive the pieces directly instead:
 
     make
     python3 tools/toppm.py images/cat.png out/cat-target.ppm 256
-    ./geo out/cat-target.ppm 200 2000 out/cat
+    ./geo out/cat-target.ppm 200 2000 out/cat 15
 
 `tools/toppm.py` converts any image macOS can read into a binary PPM, using
 sips plus a small PNG decoder, so there are no third-party dependencies.
@@ -49,7 +49,7 @@ sips plus a small PNG decoder, so there are no third-party dependencies.
 IO, no process startup -- and reports the median of several trials plus the
 final error, so a faster kernel that quietly changed the answer is obvious.
 
-    ./bench out/sample-target.ppm 200 2000 5
+    ./bench out/sample-target.ppm 200 2000 5 15
 
 The rasterizer lives behind `kernel.h` and is swapped at link time, so backends
 can be compared on identical work:
@@ -84,13 +84,50 @@ time, median of 6.
 | fused color fit + scoring          | 1.01 s |  2.27x  | 145.9 |
 | incremental edge functions         | 0.80 s |  1.26x  | 145.9 |
 | scanline spans                     | 0.40 s |  2.00x  | 145.9 |
+| 15 threads                         | 0.07 s |  5.71x  | 145.9 |
 
-The error drop comes from the fused pass solving color analytically rather than
-taking the mean target color. Everything after that is identical output.
+32x end to end. The error drop comes from the fused pass solving color
+analytically rather than taking the mean target color. Everything after that is
+identical output.
 
-Still to do: AVX2, multithreading, and a HIP port, all benchmarked on one
-machine so the GPU comparison is honest. The kernel is memory-bound, so the
-bandwidth ratio predicts the GPU speedup -- worth stating before measuring.
+### Thread scaling
+
+Scoring is parallel; candidates are still generated on one thread so the rand()
+stream does not depend on the thread count, and the winner is chosen by an
+ascending scan with a strict compare. Results are therefore bit-identical at
+every thread count -- worth checking, since a benchmark that quietly changes the
+work it measures is worthless.
+
+| threads | time     | speedup |
+|---------|----------|---------|
+|       1 | 413.4 ms |   1.00x |
+|       2 | 223.3 ms |   1.85x |
+|       4 | 122.7 ms |   3.37x |
+|       5 | 108.6 ms |   3.81x |
+|       8 |  85.8 ms |   4.82x |
+|      10 |  75.2 ms |   5.50x |
+|      15 |  64.8 ms |   6.38x |
+
+The M5 Pro has 5 performance and 10 efficiency cores, and the curve bends where
+the P cores run out.
+
+Efficiency also depends on round length, because every round ends in a barrier.
+Holding total work fixed at 400,000 candidates:
+
+| rounds x candidates | 1 thread | 15 threads | speedup |
+|---------------------|----------|------------|---------|
+| 200 x 2,000         |   419 ms |      68 ms |   6.1x  |
+| 50 x 8,000          |   418 ms |      55 ms |   7.6x  |
+| 20 x 20,000         |   417 ms |      51 ms |   8.3x  |
+
+That is roughly 89 us of synchronization per round. Static chunking was worse
+again: candidate triangles vary ~70x in area, so threads sat idle waiting on
+whoever drew the big ones. Pulling small batches off an atomic cursor recovered
+most of the loss.
+
+Still to do: AVX2 and a HIP port, benchmarked on one machine so the GPU
+comparison is honest. The kernel is memory-bound, so the bandwidth ratio
+predicts the GPU speedup -- worth stating before measuring.
 
 ## Initial Constraints
 

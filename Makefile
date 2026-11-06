@@ -1,10 +1,10 @@
 CXX ?= c++
-CXXFLAGS ?= -O2 -Wall
+CXXFLAGS ?= -O2 -Wall -pthread
 
 # Backends are swapped at link time: same driver, same work, different kernel.
 KERNEL ?= kernel_scalar.cpp
 
-DEPS = geo.h kernel.h approx.h
+DEPS = geo.h kernel.h approx.h pool.h
 
 all: geo bench
 
