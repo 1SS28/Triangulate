@@ -10,6 +10,22 @@ struct Run {
     vector<Tri> tris;
 };
 
+// Hill-climb one vertex coordinate at a time, shrinking the step whenever a move
+// fails. The best of a few thousand random draws is nowhere near a local optimum,
+// and fit() is cheap, so a few dozen more evaluations per round buy a lot.
+inline double refine(Tri &t, const Ctx *g, double score, int steps) {
+    float step = 16;
+    for (int i = 0; i < steps; i++) {
+        Tri c = t;
+        float *v[6] = {&c.x1, &c.y1, &c.x2, &c.y2, &c.x3, &c.y3};
+        *v[rand() % 6] += (frand() * 2 - 1) * step;
+        double s = fit(c, g);
+        if (s < score) { score = s; t = c; }
+        else step *= 0.93f;
+    }
+    return score;
+}
+
 // Greedy search: each round keeps the best of `tries` random candidates and
 // commits it. Seeded, so two runs of the same arguments are identical.
 //
@@ -18,8 +34,9 @@ struct Run {
 // is parallel, which is 99% of the work anyway.
 //
 // guided samples candidate centers from the residual map; otherwise they are
-// uniform over the canvas. Kept switchable so the two are comparable.
-inline Run approximate(const vector<float> &target, int W, int H, int N, int tries, unsigned seed, int threads, bool guided, bool verbose) {
+// uniform over the canvas. steps is the refinement budget for the winner. Both
+// are switchable so the plain version stays the baseline they are measured against.
+inline Run approximate(const vector<float> &target, int W, int H, int N, int tries, unsigned seed, int threads, bool guided, int steps, bool verbose) {
     Run r;
     Ctx *ctx = ctxCreate(target, W, H);
     r.e0 = loss(ctxCanvas(ctx), target);
@@ -58,6 +75,7 @@ inline Run approximate(const vector<float> &target, int W, int H, int N, int tri
             break;
         }
 
+        if (steps > 0) bestScore = refine(cand[best], ctx, bestScore, steps);
         draw(cand[best], ctx, pool);
         if (guided) resUpdate(res, cand[best], ctxCanvas(ctx), target);
         r.e += bestScore;

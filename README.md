@@ -19,11 +19,11 @@ where R(theta) is the image produced by rendering the primitives.
 
 Drop any image into `images/`, then:
 
-    ./run.sh cat.png [triangles] [candidates] [size] [threads] [guided]
+    ./run.sh cat.png [triangles] [candidates] [size] [threads] [guided] [refine]
 
 Defaults are 200 triangles, 2000 candidates per triangle, a 256 pixel longest
-side, a single thread, and residual-guided placement. Neither the thread count
-nor the kernel changes the output. The script builds, converts, runs, and opens the result.
+side, a single thread, residual-guided placement, and 64 refinement steps.
+Neither the thread count nor the kernel changes the output. The script builds, converts, runs, and opens the result.
 Run it with no arguments to list the images available.
 
 Everything generated goes to `out/`:
@@ -39,7 +39,7 @@ To drive the pieces directly instead:
 
     make
     python3 tools/toppm.py images/cat.png out/cat-target.ppm 256
-    ./geo out/cat-target.ppm 200 2000 out/cat 15 1
+    ./geo out/cat-target.ppm 200 2000 out/cat 15 1 64
 
 `tools/toppm.py` converts any image macOS can read into a binary PPM, using
 sips plus a small PNG decoder, so there are no third-party dependencies.
@@ -68,40 +68,61 @@ reconstruction work, so the numbers are reproducible:
     curl -o images/kodim23.png https://r0k.us/graphics/kodak/kodak/kodim23.png
     ./run.sh kodim23.png 350 2000 512
 
-| resolution | flat-colour baseline | uniform | residual-guided | % of baseline |
-|------------|----------------------|---------|-----------------|---------------|
-| 256 x 170  |               5650.0 |   315.3 |           303.9 |          5.4% |
-| 512 x 341  |              23147.3 |  1785.3 |          1694.8 |          7.3% |
+| resolution | flat-colour baseline | plain greedy | current default | % of baseline |
+|------------|----------------------|--------------|-----------------|---------------|
+| 256 x 170  |               5650.0 |        309.8 |           197.9 |          3.5% |
+| 512 x 341  |              23147.3 |       1802.6 |          1174.1 |          5.1% |
 
-350 triangles, 2000 candidates each. The percentage is resolution-dependent --
-the same triangle budget covers proportionally less detail as the image grows --
-so quote it with the size.
+350 triangles, 2000 candidates each, mean over five seeds. "Plain greedy" is
+uniform placement with no refinement; the default adds both, below. The
+percentage is resolution-dependent -- the same triangle budget covers
+proportionally less detail as the image grows -- so quote it with the size.
 
-### Residual-guided placement
+### Candidate placement and refinement
 
-Candidate centres are drawn from the error that is left rather than uniformly
-over the canvas, so triangles get proposed where the reconstruction is still
-wrong. The residual is held as a sum per 8x8 tile; after each committed triangle
-only the tiles it overlapped are refreshed, so the map costs one pass at startup
-and O(bbox) per round, well under 1% of the round.
+Two cheap additions to the greedy loop, both switchable so the plain version
+stays the baseline they are measured against.
 
-Sampling single pixels instead of tiles was worse -- it piles every candidate
-onto the one worst pixel. 8x8 beat 4, 16 and 32.
+**Residual-guided placement.** Candidate centres are drawn from the error that is
+left rather than uniformly over the canvas, so triangles get proposed where the
+reconstruction is still wrong. The residual is held as a sum per 8x8 tile; after
+each committed triangle only the tiles it overlapped are refreshed, so the map
+costs one pass at startup and O(bbox) per round. Sampling single pixels instead
+of tiles was worse -- it piles every candidate onto the one worst pixel. 8x8 beat
+4, 16 and 32.
 
-kodim23 at 512x341, 350 triangles, mean over five seeds (the spread between seeds
-is about +-2%, so one run is not enough to compare these):
+**Vertex refinement.** The winner is then hill-climbed: move one of its six
+coordinates at random, keep the move if the error drops, shrink the step when it
+does not. 64 of those is 3% more `fit()` calls than the 2000 random draws already
+cost, and buys far more than 3% -- the best of a few thousand random triangles is
+nowhere near a local optimum.
 
-| candidates | uniform | residual-guided | better by |
-|------------|---------|-----------------|-----------|
-|        125 |  2686.3 |          2497.5 |      7.0% |
-|        500 |  2175.7 |          2030.2 |      6.7% |
-|       2000 |  1802.6 |          1709.7 |      5.2% |
+kodim23 at 512x341, 350 triangles x 2000 candidates, mean over five seeds:
 
-The gap narrows as the budget grows, which is the point: best-of-2000 already
-lands on high-error regions by accident, so guiding the draw is worth most when
-there are few candidates to spend.
+| placement | refinement | error  | vs plain |
+|-----------|------------|--------|----------|
+| uniform   | off        | 1802.6 |    --    |
+| residual  | off        | 1709.7 |    5.2%  |
+| uniform   | 64 steps   | 1211.5 |   32.8%  |
+| residual  | 64 steps   | 1174.1 |   34.9%  |
 
-Switch it off with the last argument to compare: `./run.sh kodim23.png 350 2000 512 1 0`.
+Refinement does most of that and partly subsumes the placement, since a
+hill-climb can walk a badly placed triangle somewhere better. Placement keeps
+3-5% on top, and more of it when candidates are scarce:
+
+| candidates | uniform | residual | better by |   time |
+|------------|---------|----------|-----------|--------|
+|        125 |  1514.7 |   1440.1 |      4.9% |  52 ms |
+|        500 |  1350.1 |   1297.9 |      3.9% | 118 ms |
+|       2000 |  1211.5 |   1174.1 |      3.1% | 391 ms |
+
+With both on, 125 candidates reaches 1440 in 52 ms, against 1803 in 381 ms for
+plain greedy: 20% lower error in a seventh of the time. Refinement also tightens
+the spread between seeds from about +-2% to +-0.8%, because the answer depends
+less on the luck of the draw.
+
+Switch either off to compare -- `./run.sh kodim23.png 350 2000 512 1 0 0` is
+plain greedy.
 
 ### CPU optimization so far
 
@@ -110,8 +131,8 @@ time. Every step below leaves the output bit-identical -- same 200 triangles,
 same parameters -- except the fused pass, which lowers error by solving colour
 exactly instead of taking the mean.
 
-Every row is `/usr/bin/time -p` on the same command, with uniform placement, so
-they stay comparable with the V1 baseline.
+Every row is `/usr/bin/time -p` on the same command, as plain greedy -- uniform
+placement, no refinement -- so they stay comparable with the V1 baseline.
 
 | version                            | threads | time   | vs prev | error |
 |------------------------------------|---------|--------|---------|-------|
@@ -280,7 +301,8 @@ Approximate a simple image using triangles.
 Residual-based triangle placement. Done -- 5% lower error at equal cost.
 
 ### V3
-Optimize triangle geometry numerically.
+Optimize triangle geometry numerically. Done -- vertex hill-climbing, 33% lower
+error for 3% more candidate evaluations.
 
 ### V4
 Compare optimization methods.
