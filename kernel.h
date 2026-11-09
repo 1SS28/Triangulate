@@ -5,7 +5,8 @@
 
 // Which backend this binary was linked against. Swap implementations at link
 // time (kernel_scalar.cpp, later kernel_avx2.cpp, kernel_hip.cpp) so bench can
-// compare them on identical work.
+// compare them on the same image and triangle budget. Not bit-identically,
+// though: see the README on why refinement makes the two kernels diverge.
 extern const char *KERNEL_NAME;
 
 // Opaque per-backend state: the canvas plus whatever that backend needs to score

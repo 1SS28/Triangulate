@@ -53,12 +53,47 @@ final error, so a faster kernel that quietly changed the answer is obvious.
     ./bench out/sample-target.ppm 200 2000 5 15
 
 The rasterizer lives behind `kernel.h` and is swapped at link time, so backends
-can be compared on identical work. `make compare` runs the two CPU kernels head
+can be compared on the same image and triangle budget. `make compare` runs the two CPU kernels head
 to head:
 
     make bench KERNEL=kernel_direct.cpp
     make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -pthread -mavx2"
     make bench KERNEL=kernel_hip.cpp CXX=hipcc
+
+### Against fogleman/primitive
+
+[Primitive](https://github.com/fogleman/primitive) is the reference
+implementation of this idea: same greedy loop, same mean-colour start, same
+hill-climbing refinement. `tools/kodak_bench.py` hands both fitters the identical
+downscaled target and scores both outputs with `tools/psnr.py`, so the PSNRs are
+comparable.
+
+All 24 Kodak images, 350 triangles at 512 px longest side, one thread:
+
+|                    | mean PSNR | mean time |
+|--------------------|-----------|-----------|
+| this project       | 25.02 dB  |    0.38 s |
+| fogleman/primitive | 24.97 dB  |   21.25 s |
+
+A tie on quality -- +0.04 dB, and primitive is ahead on 11 of the 24 -- in
+1/56th the time. Where the speed comes from, holding the algorithm or the
+language fixed:
+
+| version                        | mean time | vs next |
+|--------------------------------|-----------|---------|
+| primitive, Go, O(area)         |   21.25 s |         |
+| direct kernel, C++, O(area)    |    0.94 s |  22.7x  |
+| prefix kernel, C++, O(height)  |    0.36 s |   2.6x  |
+
+So most of the 56x is implementation rather than the complexity change: the
+prefix reformulation is worth 2.6x, and the rest is the gap between this code and
+primitive's. Worth stating plainly, since 56x invites the wrong conclusion.
+
+Two caveats. The search budgets are not matched, only the output budget is --
+2000 random draws plus 64 refinement steps per triangle here against primitive's
+own schedule -- so this is quality per triangle, with time as a separate axis.
+And primitive's defaults sit very close but not exactly on ours: alpha 128 is
+0.502 against 0.5, and it reports RMSE where this reports SSE.
 
 ### Reconstruction quality
 
@@ -193,6 +228,18 @@ The fastest run of either kernel on kodim23 is the prefix kernel on 8 threads,
 118 ms, which beats the direct kernel on all 15. Which kernel wins depends on
 how many cores you are willing to spend.
 
+The two kernels do not agree bit for bit once refinement is on, and that is
+inherent rather than a bug. Refinement scores a triangle against a slightly
+perturbed copy of itself, so the two scores are genuinely close, and the kernels
+sum in different orders -- prefix sums of doubles against per-pixel accumulation.
+Close enough scores let one kernel accept a move the other rejects. On kodim02 a
+single flip at triangle 27 leaves 321 of the 350 triangles different, for a PSNR
+difference of 0.08 dB (29.46 against 29.54). Quality is unaffected; exact
+reproducibility across kernels is not available, so compare them on aggregate
+quality and time, not on a diff. Thread count is a separate matter -- within one
+kernel the output is bit-identical at any thread count, checked on all 24 Kodak
+images at 1, 2, 8 and 15 threads.
+
 Two findings on the way there, both from measuring rather than guessing. The
 five sums were first stored as five separate arrays, which was only 1.41x --
 each row cost five cache lines instead of one. Interleaving them at each x took
@@ -202,10 +249,12 @@ threaded performance until it was parallelized over rows.
 ### Thread scaling
 
 Scoring is parallel; candidates are still generated on one thread so the rand()
-stream does not depend on the thread count, and the winner is chosen by an
-ascending scan with a strict compare. Results are therefore bit-identical at
-every thread count -- worth checking, since a benchmark that quietly changes the
-work it measures is worthless.
+stream does not depend on the thread count, the winner is chosen by an ascending
+scan with a strict compare, and refinement runs on the committing thread.
+Results are therefore bit-identical at every thread count, checked on all 24
+Kodak images at 1, 2, 8 and 15 threads -- worth checking, since a benchmark that
+quietly changes the work it measures is worthless. This holds within a kernel;
+across kernels it does not, for the reason given above.
 
 Efficiency also depends on round length, because every round ends in a barrier.
 Holding total work fixed at 400,000 candidates on the direct kernel:
