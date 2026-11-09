@@ -31,6 +31,7 @@ int main(int argc, char **argv) {
 
     writePPM(imgPath, r.canvas, W, H);
     // recompute should match; catches drift in fit()
-    printf("final error %.1f (recomputed %.1f)\n", r.e, loss(r.canvas, target));
+    printf("final error %.1f (recomputed %.1f)  psnr %.2f dB\n",
+           r.e, loss(r.canvas, target), psnr(r.e, W, H));
     printf("wrote %s and %s\n", imgPath, triPath);
 }

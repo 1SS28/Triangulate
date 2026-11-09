@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -89,6 +90,15 @@ inline double loss(const vector<float> &a, const vector<float> &b) {
     double s = 0;
     for (size_t i = 0; i < a.size(); i++) { double d = a[i] - b[i]; s += d * d; }
     return s;
+}
+
+// Peak signal-to-noise ratio in dB, the standard metric for this kind of work --
+// loss() alone is not comparable with anything published. Channels are [0,1], so
+// the peak is 1 and MSE is the loss spread over every channel sample.
+inline double psnr(double sse, int W, int H) {
+    double mse = sse / ((double)W * H * 3);
+    if (mse <= 0) return 99.0;  // exact match
+    return 10 * log10(1.0 / mse);
 }
 
 // canvas filled with the target's mean color

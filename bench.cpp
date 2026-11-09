@@ -32,6 +32,6 @@ int main(int argc, char **argv) {
     }
     sort(ms.begin(), ms.end());
 
-    printf("%-8s %5dx%-5d N=%-5d tries=%-6d threads=%-3d %-8s refine=%-4d trials=%-3d  median %8.1f ms  error %.1f\n",
-           KERNEL_NAME, W, H, N, tries, threads, guided ? "residual" : "uniform", steps, trials, ms[trials / 2], err);
+    printf("%-8s %5dx%-5d N=%-5d tries=%-6d threads=%-3d %-8s refine=%-4d trials=%-3d  median %8.1f ms  error %.1f  psnr %.2f dB\n",
+           KERNEL_NAME, W, H, N, tries, threads, guided ? "residual" : "uniform", steps, trials, ms[trials / 2], err, psnr(err, W, H));
 }
