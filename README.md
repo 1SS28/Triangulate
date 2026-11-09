@@ -19,10 +19,11 @@ where R(theta) is the image produced by rendering the primitives.
 
 Drop any image into `images/`, then:
 
-    ./run.sh cat.png [triangles] [candidates] [size] [threads]
+    ./run.sh cat.png [triangles] [candidates] [size] [threads] [guided]
 
 Defaults are 200 triangles, 2000 candidates per triangle, a 256 pixel longest
-side, and a single thread. Thread count does not change the output. The script builds, converts, runs, and opens the result.
+side, a single thread, and residual-guided placement. Neither the thread count
+nor the kernel changes the output. The script builds, converts, runs, and opens the result.
 Run it with no arguments to list the images available.
 
 Everything generated goes to `out/`:
@@ -38,7 +39,7 @@ To drive the pieces directly instead:
 
     make
     python3 tools/toppm.py images/cat.png out/cat-target.ppm 256
-    ./geo out/cat-target.ppm 200 2000 out/cat 15
+    ./geo out/cat-target.ppm 200 2000 out/cat 15 1
 
 `tools/toppm.py` converts any image macOS can read into a binary PPM, using
 sips plus a small PNG decoder, so there are no third-party dependencies.
@@ -67,13 +68,40 @@ reconstruction work, so the numbers are reproducible:
     curl -o images/kodim23.png https://r0k.us/graphics/kodak/kodak/kodim23.png
     ./run.sh kodim23.png 350 2000 512
 
-| resolution | flat-colour baseline | 350 triangles | % of baseline |
-|------------|----------------------|---------------|---------------|
-| 256 x 170  |               5650.0 |         315.3 |          5.6% |
-| 512 x 341  |              23147.3 |        1785.3 |          7.7% |
+| resolution | flat-colour baseline | uniform | residual-guided | % of baseline |
+|------------|----------------------|---------|-----------------|---------------|
+| 256 x 170  |               5650.0 |   315.3 |           303.9 |          5.4% |
+| 512 x 341  |              23147.3 |  1785.3 |          1694.8 |          7.3% |
 
-The percentage is resolution-dependent -- the same triangle budget covers
-proportionally less detail as the image grows -- so quote it with the size.
+350 triangles, 2000 candidates each. The percentage is resolution-dependent --
+the same triangle budget covers proportionally less detail as the image grows --
+so quote it with the size.
+
+### Residual-guided placement
+
+Candidate centres are drawn from the error that is left rather than uniformly
+over the canvas, so triangles get proposed where the reconstruction is still
+wrong. The residual is held as a sum per 8x8 tile; after each committed triangle
+only the tiles it overlapped are refreshed, so the map costs one pass at startup
+and O(bbox) per round, well under 1% of the round.
+
+Sampling single pixels instead of tiles was worse -- it piles every candidate
+onto the one worst pixel. 8x8 beat 4, 16 and 32.
+
+kodim23 at 512x341, 350 triangles, mean over five seeds (the spread between seeds
+is about +-2%, so one run is not enough to compare these):
+
+| candidates | uniform | residual-guided | better by |
+|------------|---------|-----------------|-----------|
+|        125 |  2686.3 |          2497.5 |      7.0% |
+|        500 |  2175.7 |          2030.2 |      6.7% |
+|       2000 |  1802.6 |          1709.7 |      5.2% |
+
+The gap narrows as the budget grows, which is the point: best-of-2000 already
+lands on high-error regions by accident, so guiding the draw is worth most when
+there are few candidates to spend.
+
+Switch it off with the last argument to compare: `./run.sh kodim23.png 350 2000 512 1 0`.
 
 ### CPU optimization so far
 
@@ -82,7 +110,8 @@ time. Every step below leaves the output bit-identical -- same 200 triangles,
 same parameters -- except the fused pass, which lowers error by solving colour
 exactly instead of taking the mean.
 
-Every row is `/usr/bin/time -p` on the same command, so they are comparable.
+Every row is `/usr/bin/time -p` on the same command, with uniform placement, so
+they stay comparable with the V1 baseline.
 
 | version                            | threads | time   | vs prev | error |
 |------------------------------------|---------|--------|---------|-------|
@@ -132,11 +161,12 @@ kodim23, 512x341, 350 triangles x 2000 candidates:
 |       8 | 167.9 ms | 118.2 ms |     1.42x |
 |      15 | 130.5 ms | 138.7 ms |     0.94x |
 
-The advantage narrows as threads are added, and on the larger image the direct
-kernel overtakes at 15. The prefix kernel trades arithmetic for table lookups,
-and the tables are far larger than cache -- 21 MB at 512x341 -- so it goes
-latency-bound and stops scaling past about 8 threads, while the direct kernel
-reads contiguously and keeps scaling.
+The M5 Pro has 5 performance and 10 efficiency cores, and both curves bend where
+the P cores run out. The prefix kernel's advantage narrows as threads are added,
+and on the larger image the direct kernel overtakes at 15. The prefix kernel
+trades arithmetic for table lookups, and the tables are far larger than cache --
+21 MB at 512x341 -- so it goes latency-bound and stops scaling past about 8
+threads, while the direct kernel reads contiguously and keeps scaling.
 
 The fastest run of either kernel on kodim23 is the prefix kernel on 8 threads,
 118 ms, which beats the direct kernel on all 15. Which kernel wins depends on
@@ -155,9 +185,6 @@ stream does not depend on the thread count, and the winner is chosen by an
 ascending scan with a strict compare. Results are therefore bit-identical at
 every thread count -- worth checking, since a benchmark that quietly changes the
 work it measures is worthless.
-
-The M5 Pro has 5 performance and 10 efficiency cores, and the curve bends where
-the P cores run out.
 
 Efficiency also depends on round length, because every round ends in a barrier.
 Holding total work fixed at 400,000 candidates on the direct kernel:
@@ -250,7 +277,7 @@ Render a triangle mathematically.
 Approximate a simple image using triangles.
 
 ### V2
-Residual-based triangle placement.
+Residual-based triangle placement. Done -- 5% lower error at equal cost.
 
 ### V3
 Optimize triangle geometry numerically.

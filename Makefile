@@ -6,7 +6,7 @@ CXXFLAGS ?= -O2 -Wall -pthread
 #   direct  straight per-pixel accumulation, O(area)
 KERNEL ?= kernel_prefix.cpp
 
-DEPS = geo.h kernel.h approx.h pool.h
+DEPS = geo.h kernel.h approx.h pool.h residual.h
 
 all: geo bench
 

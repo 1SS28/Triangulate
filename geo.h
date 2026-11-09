@@ -26,9 +26,8 @@ inline void box(const Tri &t, int W, int H, int &bx0, int &by0, int &bx1, int &b
 
 inline float frand() { return rand() / (float)RAND_MAX; }
 
-// random point, vertices scattered up to s away
-inline Tri randomTri(int W, int H) {
-    float cx = frand() * W, cy = frand() * H;
+// vertices scattered up to s away from a given center
+inline Tri triAt(float cx, float cy) {
     float s = 8 + frand() * 60;
     Tri t;
     t.x1 = cx + (frand() * 2 - 1) * s; t.y1 = cy + (frand() * 2 - 1) * s;
@@ -37,6 +36,11 @@ inline Tri randomTri(int W, int H) {
     t.r = t.g = t.b = 0;  // fit() sets these
     t.a = 0.5f;
     return t;
+}
+
+inline Tri randomTri(int W, int H) {
+    float cx = frand() * W, cy = frand() * H;
+    return triAt(cx, cy);
 }
 
 // next int, skipping whitespace and # comments

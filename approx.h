@@ -2,6 +2,7 @@
 
 #include "kernel.h"
 #include "pool.h"
+#include "residual.h"
 
 struct Run {
     double e0, e;       // error after mean fill, and after the last triangle
@@ -15,7 +16,10 @@ struct Run {
 // Candidates are generated up front on one thread, so the rand() stream -- and
 // therefore the result -- does not depend on the thread count. Only the scoring
 // is parallel, which is 99% of the work anyway.
-inline Run approximate(const vector<float> &target, int W, int H, int N, int tries, unsigned seed, int threads, bool verbose) {
+//
+// guided samples candidate centers from the residual map; otherwise they are
+// uniform over the canvas. Kept switchable so the two are comparable.
+inline Run approximate(const vector<float> &target, int W, int H, int N, int tries, unsigned seed, int threads, bool guided, bool verbose) {
     Run r;
     Ctx *ctx = ctxCreate(target, W, H);
     r.e0 = loss(ctxCanvas(ctx), target);
@@ -25,9 +29,16 @@ inline Run approximate(const vector<float> &target, int W, int H, int N, int tri
     vector<Tri> cand(tries);
     vector<double> score(tries);
     Pool *pool = threads > 1 ? new Pool(threads) : 0;
+    Residual res;
+    if (guided) resInit(res, ctxCanvas(ctx), target, W, H);
 
     for (int n = 0; n < N; n++) {
-        for (int k = 0; k < tries; k++) cand[k] = randomTri(W, H);
+        for (int k = 0; k < tries; k++) {
+            if (!guided) { cand[k] = randomTri(W, H); continue; }
+            float cx, cy;
+            resSample(res, cx, cy);
+            cand[k] = triAt(cx, cy);
+        }
 
         function<void(int, int)> job = [&](int lo, int hi) {
             for (int k = lo; k < hi; k++) score[k] = fit(cand[k], ctx);
@@ -48,6 +59,7 @@ inline Run approximate(const vector<float> &target, int W, int H, int N, int tri
         }
 
         draw(cand[best], ctx, pool);
+        if (guided) resUpdate(res, cand[best], ctxCanvas(ctx), target);
         r.e += bestScore;
         r.tris.push_back(cand[best]);
         if (verbose && n % 20 == 19) printf("%4d triangles  error %.1f  (%.1f%% of start)\n", n + 1, r.e, 100 * r.e / r.e0);

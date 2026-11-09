@@ -6,6 +6,7 @@ int main(int argc, char **argv) {
     int tries = argc > 3 ? atoi(argv[3]) : 2000;  // candidates per triangle
     const char *prefix = argc > 4 ? argv[4] : "out";
     int threads = argc > 5 ? atoi(argv[5]) : 1;
+    int guided = argc > 6 ? atoi(argv[6]) : 1;   // 0 = uniform placement
 
     char imgPath[512], triPath[512];
     snprintf(imgPath, sizeof imgPath, "%s.ppm", prefix);
@@ -13,9 +14,10 @@ int main(int argc, char **argv) {
 
     int W, H;
     vector<float> target = readPPM(path, W, H);
-    printf("target %s  %dx%d  kernel %s  threads %d\n", path, W, H, KERNEL_NAME, threads);
+    printf("target %s  %dx%d  kernel %s  threads %d  placement %s\n",
+           path, W, H, KERNEL_NAME, threads, guided ? "residual" : "uniform");
 
-    Run r = approximate(target, W, H, N, tries, 12345, threads, true);
+    Run r = approximate(target, W, H, N, tries, 12345, threads, guided, true);
     printf("error after mean fill: %.1f\n", r.e0);
 
     FILE *log = fopen(triPath, "w");
