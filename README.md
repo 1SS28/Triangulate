@@ -23,7 +23,8 @@ Drop any image into `images/`, then:
 
 Defaults are 200 triangles, 2000 candidates per triangle, a 256 pixel longest
 side, a single thread, residual-guided placement, and 64 refinement steps.
-Neither the thread count nor the kernel changes the output. The script builds, converts, runs, and opens the result.
+The thread count never changes the output, and the kernel rarely does (see Two
+kernels). The script builds, converts, runs, and opens the result.
 Run it with no arguments to list the images available.
 
 Everything generated goes to `out/`:
@@ -32,8 +33,10 @@ Everything generated goes to `out/`:
 - `<name>.ppm` — the reconstruction
 - `<name>_tris.txt` — one triangle per line, 10 parameters each
 
-Runtime scales with pixels x triangles x candidates, so raise `size` only once
-you know how long a run takes.
+Runtime scales with triangles x candidates and only weakly with `size`, because
+candidates are drawn at a fixed size in pixels: on kodim23 a 768 pixel run takes
+about twice as long as a 256 pixel one. A larger image does need more triangles
+to look as good.
 
 To drive the pieces directly instead:
 
@@ -53,10 +56,12 @@ final error, so a faster kernel that quietly changed the answer is obvious.
     ./bench out/sample-target.ppm 200 2000 5 15
 
 The rasterizer lives behind `kernel.h` and is swapped at link time, so backends
-can be compared on the same image and triangle budget. `make compare` runs the two CPU kernels head
-to head:
+can be compared on the same image and triangle budget. `make compare` runs the
+two CPU kernels head to head; to build one by hand:
 
     make bench KERNEL=kernel_direct.cpp
+
+    # planned, not written yet
     make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -pthread -mavx2"
     make bench KERNEL=kernel_hip.cpp CXX=hipcc
 
@@ -65,35 +70,55 @@ to head:
 [Primitive](https://github.com/fogleman/primitive) is the reference
 implementation of this idea: same greedy loop, same mean-colour start, same
 hill-climbing refinement. `tools/kodak_bench.py` hands both fitters the identical
-downscaled target and scores both outputs with `tools/psnr.py`, so the PSNRs are
-comparable.
+downscaled target and scores both outputs with `tools/psnr.py`.
 
-All 24 Kodak images, 350 triangles at 512 px longest side, one thread:
+That compares what the two programs save, which for primitive is not what its
+search optimized. Primitive scores candidates on an aliased canvas, but the PNG
+it saves comes from a separate anti-aliased renderer, and colours fitted to one
+coverage fit the other less well: the saved PNG is 0.89 dB worse than the canvas,
+0.38 to 2.09 dB per image. So the fair comparison is each search on its own
+canvas. Primitive logs its canvas error with `-v`, as RMSE over RGBA; alpha never
+differs, so the RGB MSE is that squared times 4/3.
 
-|                    | mean PSNR | mean time |
-|--------------------|-----------|-----------|
-| this project       | 25.02 dB  |    0.38 s |
-| fogleman/primitive | 24.97 dB  |   21.25 s |
+All 24 Kodak images, 350 triangles at 512 px longest side, one thread, timed on
+an idle machine:
 
-A tie on quality -- +0.04 dB, and primitive is ahead on 11 of the 24 -- in
-1/56th the time. Where the speed comes from, holding the algorithm or the
-language fixed:
+|                                          | mean PSNR | time per image |
+|------------------------------------------|-----------|----------------|
+| primitive, its canvas                    |  25.87 dB |         21.3 s |
+| primitive, saved PNG                     |  24.98 dB |                |
+| this project, 2,000 candidates (default) |  25.02 dB |         0.35 s |
+| this project, 20,143 candidates          |  25.53 dB |         3.29 s |
+| this project, 130,619 candidates         |  25.84 dB |         22.6 s |
 
-| version                        | mean time | vs next |
-|--------------------------------|-----------|---------|
-| primitive, Go, O(area)         |   21.25 s |         |
-| direct kernel, C++, O(area)    |    0.94 s |  22.7x  |
-| prefix kernel, C++, O(height)  |    0.36 s |   2.6x  |
+Time is the fitting loop alone, without startup or file IO. At its defaults this
+project is 60x faster and 0.85 dB behind, on every one of the 24 images. With
+20,143 candidates, plus the 64 refinement steps, it makes as many evaluations per
+triangle as primitive, about 20,200, and is still 0.34 dB behind in 6.5x less
+time: primitive's search gets more out of each evaluation. With 130,619 it takes
+about primitive's time, and the two are level: 0.02 dB apart, 95% interval -0.13
+to +0.08 dB. Against primitive's saved PNG the defaults are level too, +0.04 dB.
 
-So most of the 56x is implementation rather than the complexity change: the
-prefix reformulation is worth 2.6x, and the rest is the gap between this code and
-primitive's. Worth stating plainly, since 56x invites the wrong conclusion.
+Where the 60x comes from:
 
-Two caveats. The search budgets are not matched, only the output budget is --
-2000 random draws plus 64 refinement steps per triangle here against primitive's
-own schedule -- so this is quality per triangle, with time as a separate axis.
-And primitive's defaults sit very close but not exactly on ours: alpha 128 is
-0.502 against 0.5, and it reports RMSE where this reports SSE.
+| version                       | evals/triangle | per eval | mean time |
+|-------------------------------|----------------|----------|-----------|
+| primitive, Go, O(area)        |         20,203 |  3.01 us |    21.3 s |
+| direct kernel, C++, O(area)   |          2,064 |  1.29 us |    0.93 s |
+| prefix kernel, C++, O(height) |          2,064 |  0.49 us |    0.35 s |
+
+Three factors multiply to it: primitive makes 9.8x as many evaluations per
+triangle, each costs it 2.3x what the direct kernel pays, and prefix sums cut the
+cost of an evaluation another 2.6x. The smaller search is the biggest factor, and
+most of the quality gap too; the prefix reformulation is the smallest. Worth
+stating plainly, since 60x invites the wrong conclusion. The 2.3x also
+understates the implementation gap: this project's candidates cover 1.8x more
+pixels, so per pixel primitive is about 4x slower.
+
+Primitive's alpha 128 is 0.502 against 0.5 here. It seeds itself from the clock,
+so its PSNRs are means of three runs; this project's are means of five seeds,
+three for the two larger budgets. Both have a run-to-run standard deviation of
+about 0.04 dB.
 
 ### Reconstruction quality
 
@@ -147,14 +172,15 @@ hill-climb can walk a badly placed triangle somewhere better. Placement keeps
 
 | candidates | uniform | residual | better by |   time |
 |------------|---------|----------|-----------|--------|
-|        125 |  1514.7 |   1440.1 |      4.9% |  52 ms |
-|        500 |  1350.1 |   1297.9 |      3.9% | 118 ms |
-|       2000 |  1211.5 |   1174.1 |      3.1% | 391 ms |
+|        125 |  1514.7 |   1440.1 |      4.9% |  55 ms |
+|        500 |  1350.1 |   1297.9 |      3.9% | 114 ms |
+|       2000 |  1211.5 |   1174.1 |      3.1% | 365 ms |
 
-With both on, 125 candidates reaches 1440 in 52 ms, against 1803 in 381 ms for
-plain greedy: 20% lower error in a seventh of the time. Refinement also tightens
-the spread between seeds from about +-2% to +-0.8%, because the answer depends
-less on the luck of the draw.
+With both on, 125 candidates reaches 1440 in 55 ms, against 1803 in 366 ms for
+plain greedy: 20% lower error in 15% of the time. On this image the two also
+narrow the spread between seeds, from a standard deviation of 1.8% of the error
+to 0.7%, but that does not generalize: over all 24 Kodak images it is about 1%
+with or without them.
 
 Switch either off to compare -- `./run.sh kodim23.png 350 2000 512 1 0 0` is
 plain greedy.
@@ -197,48 +223,79 @@ rebuilt only for the rows a committed triangle touched.
 
 Both kernels are kept, because they behave differently under threading.
 
-sample, 256x256, 200 triangles x 2000 candidates:
+kodim23 at 256x170, 350 triangles x 2000 candidates, default settings, median of
+three runs on an idle machine:
 
 | threads | direct   | prefix   | prefix is |
 |---------|----------|----------|-----------|
-|       1 | 474.4 ms | 161.8 ms |     2.93x |
-|       2 | 249.1 ms |  94.8 ms |     2.63x |
-|       4 | 141.2 ms |  65.4 ms |     2.16x |
-|       8 |  88.7 ms |  53.4 ms |     1.66x |
-|      15 |  66.8 ms |  58.5 ms |     1.14x |
+|       1 | 830.5 ms | 272.4 ms |     3.05x |
+|       2 | 455.8 ms | 169.4 ms |     2.69x |
+|       4 | 263.8 ms | 113.1 ms |     2.33x |
+|       5 | 228.9 ms | 104.8 ms |     2.18x |
+|       8 | 189.8 ms | 104.2 ms |     1.82x |
+|      15 | 153.7 ms | 120.4 ms |     1.28x |
 
-kodim23, 512x341, 350 triangles x 2000 candidates:
+The same at 512x341:
 
 | threads | direct   | prefix   | prefix is |
 |---------|----------|----------|-----------|
-|       1 | 904.4 ms | 491.5 ms |     1.84x |
-|       2 | 476.1 ms | 220.0 ms |     2.16x |
-|       4 | 256.9 ms | 135.8 ms |     1.89x |
-|       8 | 167.9 ms | 118.2 ms |     1.42x |
-|      15 | 130.5 ms | 138.7 ms |     0.94x |
+|       1 | 953.7 ms | 356.6 ms |     2.67x |
+|       2 | 545.7 ms | 216.0 ms |     2.53x |
+|       4 | 331.5 ms | 142.3 ms |     2.33x |
+|       5 | 287.9 ms | 127.6 ms |     2.26x |
+|       8 | 242.0 ms | 137.8 ms |     1.76x |
+|      15 | 209.3 ms | 159.0 ms |     1.32x |
 
-The M5 Pro has 5 performance and 10 efficiency cores, and both curves bend where
-the P cores run out. The prefix kernel's advantage narrows as threads are added,
-and on the larger image the direct kernel overtakes at 15. The prefix kernel
-trades arithmetic for table lookups, and the tables are far larger than cache --
-21 MB at 512x341 -- so it goes latency-bound and stops scaling past about 8
-threads, while the direct kernel reads contiguously and keeps scaling.
+The M5 Pro has 5 super cores sharing a 16 MB L2, and 10 performance cores in two
+clusters of five with 8 MB each. The prefix kernel is faster at every size and
+thread count. At these two sizes it stops gaining at 5 or 6 threads and then
+slows down, while the direct kernel keeps gaining to 15 without catching up: the
+fastest run at 512x341 is the prefix kernel on 5 threads, 128 ms, against 209 ms
+for the direct kernel on all 15. At 768x512 the prefix kernel's lead is 1.81x on
+one thread and 1.37x on 15.
 
-The fastest run of either kernel on kodim23 is the prefix kernel on 8 threads,
-118 ms, which beats the direct kernel on all 15. Which kernel wins depends on
-how many cores you are willing to spend.
+Memory is not the main reason the lead shrinks with threads: it shrinks fastest
+at 256x170, where the prefix kernel's 5 MB of tables fit in either L2. Timing
+each phase of the same configuration, at 512x341 unless noted, shows three costs
+that come first:
 
-The two kernels do not agree bit for bit once refinement is on, and that is
-inherent rather than a bug. Refinement scores a triangle against a slightly
-perturbed copy of itself, so the two scores are genuinely close, and the kernels
-sum in different orders -- prefix sums of doubles against per-pixel accumulation.
-Close enough scores let one kernel accept a move the other rejects. On kodim02 a
-single flip at triangle 27 leaves 321 of the 350 triangles different, for a PSNR
-difference of 0.08 dB (29.46 against 29.54). Quality is unaffected; exact
-reproducibility across kernels is not available, so compare them on aggregate
-quality and time, not on a diff. Thread count is a separate matter -- within one
-kernel the output is bit-identical at any thread count, checked on all 24 Kodak
-images at 1, 2, 8 and 15 threads.
+- Candidates are generated on one thread, so that the result does not depend on
+  the thread count. That takes 41-45 ms per image at any thread count: 12% of
+  the prefix kernel's one-thread time, but only 5% of the direct kernel's.
+- The prefix kernel's rounds are short. Scoring 2,000 candidates on 5 threads
+  takes it about 195 us, against 528 us for the direct kernel, so the fixed cost
+  of each round (see Thread scaling below) weighs more, and its scoring stops
+  speeding up at 5 threads at either size. With rounds ten times longer it speeds
+  up again from 5 to 15 threads, 2.1x at 256x170 and 1.5x at 512x341.
+- The table rebuild after each committed triangle gets slower past 5 threads,
+  from 7 ms per image on 5 to 29 ms on 15: a few dozen rows are too little work
+  to split fifteen ways.
+
+Memory does show up once those are out of the way. With the long rounds the
+prefix kernel's 2.1x at 256x170 is close to the direct kernel's 2.4x, but at
+512x341, where its 20 MB of tables fit in neither L2, it gets 1.5x against 2.4x.
+Size costs it on one thread too: candidates are the same size in pixels at every
+resolution, so from 512x341 to 768x512 the direct kernel's scoring time barely
+moves, 828 to 888 ms, while the prefix kernel's goes from 273 to 460 ms as its
+tables grow to 45 MB, consistent with cache misses on scattered lookups.
+
+Refinement, which also runs on one thread, favours the prefix kernel too: it
+costs the direct kernel 52 ms per image and the prefix kernel 9. Without
+placement or refinement, in plain greedy, the direct kernel draws level by 15
+threads: 131 ms against 129.
+
+The two kernels agree bit for bit on 22 of the 24 Kodak images, and that they
+differ on the other two is inherent rather than a bug. Refinement scores a
+triangle against a slightly perturbed copy of itself, so the two scores are
+genuinely close, and the kernels sum in different orders -- prefix sums of
+doubles against per-pixel accumulation. Close enough scores let one kernel accept
+a move the other rejects. On kodim02 a single flip at triangle 27 leaves 321 of
+the 350 triangles different, for a PSNR difference of 0.08 dB (29.46 against
+29.54); on kodim24 the first triangle already differs, and the two end 0.04 dB
+apart. Exact reproducibility across kernels is not guaranteed, so compare them on
+aggregate quality and time, not on a diff. Thread count is a separate matter --
+within one kernel the output is bit-identical at any thread count, checked for the
+prefix kernel on all 24 Kodak images at 1, 2, 8 and 15 threads.
 
 Two findings on the way there, both from measuring rather than guessing. The
 five sums were first stored as five separate arrays, which was only 1.41x --
@@ -254,7 +311,7 @@ scan with a strict compare, and refinement runs on the committing thread.
 Results are therefore bit-identical at every thread count, checked on all 24
 Kodak images at 1, 2, 8 and 15 threads -- worth checking, since a benchmark that
 quietly changes the work it measures is worthless. This holds within a kernel;
-across kernels it does not, for the reason given above.
+across kernels it fails on 2 of the 24 images, for the reason given above.
 
 Efficiency also depends on round length, because every round ends in a barrier.
 Holding total work fixed at 400,000 candidates on the direct kernel:
@@ -271,9 +328,8 @@ whoever drew the big ones. Pulling small batches off an atomic cursor recovered
 most of the loss.
 
 Still to do: AVX2 and a HIP port, benchmarked on one machine so the GPU
-comparison is honest. The direct kernel is the better GPU candidate -- it reads
-contiguously and is bandwidth-bound, where the prefix kernel is latency-bound on
-scattered lookups.
+comparison is honest. The direct kernel may be the better GPU candidate -- it
+reads contiguously, where the prefix kernel's lookups are scattered.
 
 ## Initial Constraints
 

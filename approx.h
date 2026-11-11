@@ -30,8 +30,8 @@ inline double refine(Tri &t, const Ctx *g, double score, int steps) {
 // commits it. Seeded, so two runs of the same arguments are identical.
 //
 // Candidates are generated up front on one thread, so the rand() stream -- and
-// therefore the result -- does not depend on the thread count. Only the scoring
-// is parallel, which is 99% of the work anyway.
+// therefore the result -- does not depend on the thread count. The price is a
+// serial 4-15% of one-thread time, which caps the speedup.
 //
 // guided samples candidate centers from the residual map; otherwise they are
 // uniform over the canvas. steps is the refinement budget for the winner. Both
