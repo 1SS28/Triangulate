@@ -97,7 +97,7 @@ private:
     atomic<int> round;
     atomic<int> left;
     atomic<int> next;
-    bool stop = false;
+    atomic<bool> stop{false};  // read unlocked in the spin loop
     const function<void(int, int)> *job = nullptr;
     mutex m;
     condition_variable cv, fin;
