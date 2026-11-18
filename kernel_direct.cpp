@@ -4,10 +4,9 @@
 
 const char *KERNEL_NAME = "direct";
 
-// Straight per-pixel accumulation over each covered span. Kept alongside the
-// prefix-sum kernel because the two behave very differently under threading:
-// this one does more arithmetic but reads contiguously, so it keeps scaling
-// where the table lookups go latency-bound.
+// Straight per-pixel accumulation over each covered span. Slower than the prefix
+// kernel at every thread count, but its longer rounds and lack of a table rebuild
+// keep it scaling after the prefix kernel stalls (README, Two kernels).
 struct Ctx {
     int W, H;
     vector<float> canvas;
