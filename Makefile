@@ -28,7 +28,11 @@ compare: bench bench-direct
 #   make bench KERNEL=kernel_avx2.cpp CXXFLAGS="-O2 -Wall -pthread -mavx2"
 #   make bench KERNEL=kernel_hip.cpp CXX=hipcc
 
+# the thread count must never change the output, for either kernel; ci runs this
+check:
+	CXX="$(CXX)" CXXFLAGS="$(CXXFLAGS)" tools/check.sh
+
 clean:
 	rm -f geo bench bench-direct
 
-.PHONY: all clean compare
+.PHONY: all check clean compare

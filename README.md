@@ -1,5 +1,7 @@
 # Triangulate
 
+[![CI](https://github.com/1SS28/Triangulate/actions/workflows/ci.yml/badge.svg)](https://github.com/1SS28/Triangulate/actions/workflows/ci.yml)
+
 ## Goal
 
 Reconstruct a raster image using only geometric primitives and mathematical
@@ -312,6 +314,12 @@ Results are therefore bit-identical at every thread count, checked on all 24
 Kodak images at 1, 2, 8 and 15 threads -- worth checking, since a benchmark that
 quietly changes the work it measures is worthless. This holds within a kernel;
 across kernels it fails on 2 of the 24 images, for the reason given above.
+
+`make check` repeats the check on `images/sample.png`: it builds both kernels,
+runs each at 1, 2, 3 and 8 threads, and fails unless every run writes the same
+image and triangle list, and the running error matches a full recompute. CI runs
+it on every push on Linux and macOS, and again under AddressSanitizer,
+UndefinedBehaviorSanitizer and ThreadSanitizer.
 
 Efficiency also depends on round length, because every round ends in a barrier.
 Holding total work fixed at 400,000 candidates on the direct kernel:

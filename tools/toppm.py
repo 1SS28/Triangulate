@@ -4,6 +4,7 @@
     python3 tools/toppm.py photo.jpg target.ppm [max_size]
 
 sips decodes to PNG, this decodes the PNG. No third-party libraries.
+A max_size of 0 skips sips and keeps the size, so PNGs convert off macOS too.
 """
 
 import os
@@ -101,19 +102,23 @@ def main():
     src, dst = sys.argv[1], sys.argv[2]
     max_size = int(sys.argv[3]) if len(sys.argv) > 3 else 256
 
-    tmp = tempfile.mktemp(suffix=".png")
-    try:
-        subprocess.run(
-            ["sips", "-s", "format", "png", "-Z", str(max_size), src, "-o", tmp],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-        with open(tmp, "rb") as f:
+    if max_size == 0:
+        with open(src, "rb") as f:
             width, height, rgb = png_to_rgb(f.read())
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    else:
+        tmp = tempfile.mktemp(suffix=".png")
+        try:
+            subprocess.run(
+                ["sips", "-s", "format", "png", "-Z", str(max_size), src, "-o", tmp],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+            with open(tmp, "rb") as f:
+                width, height, rgb = png_to_rgb(f.read())
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
     with open(dst, "wb") as f:
         f.write(b"P6 %d %d 255\n" % (width, height))

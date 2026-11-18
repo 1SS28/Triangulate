@@ -1,0 +1,35 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build with warnings as errors
+        run: make all bench-direct CXXFLAGS="-O2 -Wall -Werror -pthread"
+      - name: Same output at any thread count
+        run: make check CXXFLAGS="-O2 -Wall -Werror -pthread"
+
+  sanitize:
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ["address,undefined", thread]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # older sanitizer runtimes abort under 32-bit mmap randomization
+      - run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: make check under -fsanitize=${{ matrix.sanitizer }}
+        run: make check CXXFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=${{ matrix.sanitizer }} -fno-sanitize-recover=all -pthread"
